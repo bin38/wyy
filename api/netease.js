@@ -83,11 +83,62 @@ function getParamsAndEnc(text) {
     };
 }
 
+// 添加获取歌曲详细信息的函数
+async function getMusicInfo(musicItem) {
+    const headers = {
+        Referer: "https://y.music.163.com/",
+        Origin: "https://y.music.163.com/",
+        authority: "music.163.com",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.135 Safari/537.36",
+        "Content-Type": "application/x-www-form-urlencoded",
+    };
+    
+    try {
+        const data = { id: musicItem.id, ids: `[${musicItem.id}]` };
+        const result = (await axiosInstance.get('https://music.163.com/api/song/detail', {
+            headers,
+            params: data
+        })).data;
+        
+        if (result.songs && result.songs.length > 0) {
+            return {
+                artwork: result.songs[0].album?.picUrl,
+            };
+        }
+        return null;
+    } catch (error) {
+        console.error('Get music info error:', error.message);
+        return null;
+    }
+}
+
 function formatMusicItem(_) {
     const album = _.al || _.album;
+    
+    // 尝试从多个可能的字段获取封面
+    let artwork = null;
+    if (album) {
+        artwork = album.picUrl || album.pic_str || album.pic;
+    }
+    
+    // 如果还是没有，尝试从根级别获取
+    if (!artwork) {
+        artwork = _.picUrl || _.pic_str || _.pic;
+    }
+    
+    // 如果封面存在但是小图，转换为大图
+    if (artwork && artwork.includes('music.126.net')) {
+        artwork = artwork.replace(/\?param=\d+y\d+/, '?param=300y300');
+    }
+    
+    // 最终默认值
+    if (!artwork) {
+        artwork = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="200" height="200"%3E%3Crect width="200" height="200" fill="%23333"/%3E%3Ctext x="50%25" y="50%25" text-anchor="middle" fill="white" font-size="20"%3E封面%3C/text%3E%3C/svg%3E';
+    }
+    
     return {
         id: _.id,
-        artwork: album?.picUrl,
+        artwork: artwork,
         title: _.name,
         artist: (_.ar || _.artists)[0].name,
         album: album?.name,
@@ -169,10 +220,24 @@ async function searchBase(query, page, type) {
 async function search(query, page, type) {
     if (type === "music") {
         const res = await searchBase(query, page, 1);
-        const songs = res.result.songs?.map(formatMusicItem) || [];
+        const songs = res.result.songs || [];
+        
+        if (songs.length === 0) {
+            return {
+                isEnd: true,
+                data: [],
+            };
+        }
+        
+        // 提取歌曲ID
+        const songIds = songs.map(song => song.id);
+        
+        // 使用song detail API获取完整信息（包括封面）
+        const detailedSongs = await getValidMusicItems(songIds);
+        
         return {
             isEnd: res.result.songCount <= page * pageSize,
-            data: songs,
+            data: detailedSongs,
         };
     }
     return { isEnd: true, data: [] };
@@ -427,5 +492,6 @@ module.exports = {
     importMusicSheet,
     getTopLists,
     getMediaSource,
-    getLyric
+    getLyric,
+    getMusicInfo
 }; 

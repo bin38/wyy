@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
         isDragging: false,
         isBuffering: false,
         lazyLoadObserver: null,
+        lyricScrollTimer: null,
     };
 
     // --- DOM ELEMENTS ---
@@ -68,73 +69,159 @@ document.addEventListener('DOMContentLoaded', () => {
         return url.replace(/^http:/, 'https:');
     }
 
-    function escapeHtml(unsafe) {
-        if (!unsafe) return '';
-        return unsafe
-            .toString()
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;")
-            .replace(/'/g, "&#039;");
+    // 彻底解决HTML转义问题的安全函数
+    function sanitizeHtml(str) {
+        if (str === null || str === undefined) return '';
+        
+        // 创建临时元素进行安全转义
+        const temp = document.createElement('div');
+        temp.textContent = String(str);
+        return temp.innerHTML;
     }
 
-    function unescapeHtml(safe) {
-        if (!safe) return '';
-        return safe
-            .toString()
-            .replace(/&amp;/g, "&")
-            .replace(/&lt;/g, "<")
-            .replace(/&gt;/g, ">")
-            .replace(/&quot;/g, '"')
-            .replace(/&#039;/g, "'");
+    // 解码HTML实体
+    function decodeHtml(str) {
+        if (str === null || str === undefined) return '';
+        
+        const temp = document.createElement('div');
+        temp.innerHTML = String(str);
+        return temp.textContent || temp.innerText || '';
+    }
+
+    // 安全的innerHTML设置
+    function safeSetInnerHTML(element, content) {
+        // 清空现有内容
+        element.innerHTML = '';
+        
+        if (typeof content === 'string') {
+            element.innerHTML = content;
+        } else {
+            element.appendChild(content);
+        }
     }
 
     function showLoading(message = '加载中...') {
-        mainContent.innerHTML = `
+        const sanitizedMessage = sanitizeHtml(message);
+        safeSetInnerHTML(mainContent, `
             <div class="loading-container">
                 <div class="loading-spinner"></div>
-                <div class="loading-text">${escapeHtml(message)}</div>
+                <div class="loading-text">${sanitizedMessage}</div>
                 <div class="loading-tips">数据正在加载，请稍候...</div>
-            </div>`;
+            </div>`);
     }
 
     function showError(message) {
-        mainContent.innerHTML = `<div class="error-container"><i class="fas fa-exclamation-triangle"></i><div>${escapeHtml(message)}</div></div>`;
+        const sanitizedMessage = sanitizeHtml(message);
+        safeSetInnerHTML(mainContent, `
+            <div class="error-container">
+                <i class="fas fa-exclamation-triangle"></i>
+                <div>${sanitizedMessage}</div>
+            </div>`);
     }
 
-    // --- API HELPERS ---
+    // --- API HELPERS WITH PERFORMANCE OPTIMIZATION ---
     const api = {
         getTopLists: async () => {
             const cacheKey = getCacheKey('toplists', {});
             const cached = getCache(cacheKey);
             if (cached) {
-                console.log('Using cached toplists');
                 return cached;
             }
             
-            const result = await fetch(`${API_BASE_URL}/toplists`).then(res => res.json());
-            setCache(cacheKey, result);
-            return result;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            
+            try {
+                const result = await fetch(`${API_BASE_URL}/toplists`, {
+                    signal: controller.signal
+                }).then(res => res.json());
+                setCache(cacheKey, result);
+                return result;
+            } finally {
+                clearTimeout(timeoutId);
+            }
         },
         
         getPlaylist: async (id) => {
             const cacheKey = getCacheKey('playlist', { id });
             const cached = getCache(cacheKey);
             if (cached) {
-                console.log('Using cached playlist:', id);
                 return cached;
             }
             
-            const result = await fetch(`${API_BASE_URL}/playlist?id=${id}`).then(res => res.json());
-            setCache(cacheKey, result);
-            return result;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
+            
+            try {
+                const result = await fetch(`${API_BASE_URL}/playlist?id=${id}`, {
+                    signal: controller.signal
+                }).then(res => res.json());
+                setCache(cacheKey, result);
+                return result;
+            } finally {
+                clearTimeout(timeoutId);
+            }
         },
         
-        search: (query) => fetch(`${API_BASE_URL}/search?query=${query}&type=music`).then(res => res.json()),
-        getSongUrl: (id, quality) => fetch(`${API_BASE_URL}/song/url?id=${id}&quality=${quality}`).then(res => res.json()),
-        getLyric: (id) => fetch(`${API_BASE_URL}/lyric?id=${id}`).then(res => res.json()),
-        importPlaylist: (url) => fetch(`${API_BASE_URL}/import-playlist?url=${encodeURIComponent(url)}`).then(res => res.json()),
+        search: async (query) => {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
+            
+            try {
+                return await fetch(`${API_BASE_URL}/search?query=${encodeURIComponent(query)}&type=music`, {
+                    signal: controller.signal
+                }).then(res => res.json());
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        },
+        
+        getSongUrl: async (id, quality) => {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            
+            try {
+                return await fetch(`${API_BASE_URL}/song/url?id=${id}&quality=${quality}`, {
+                    signal: controller.signal
+                }).then(res => res.json());
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        },
+        
+        getLyric: async (id) => {
+            const cacheKey = getCacheKey('lyric', { id });
+            const cached = getCache(cacheKey);
+            if (cached) {
+                return cached;
+            }
+            
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            
+            try {
+                const result = await fetch(`${API_BASE_URL}/lyric?id=${id}`, {
+                    signal: controller.signal
+                }).then(res => res.json());
+                setCache(cacheKey, result);
+                return result;
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        },
+        
+        importPlaylist: async (url) => {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
+            
+            try {
+                return await fetch(`${API_BASE_URL}/import-playlist?url=${encodeURIComponent(url)}`, {
+                    signal: controller.signal
+                }).then(res => res.json());
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        },
     };
 
     // --- LAZY LOADING ---
@@ -154,7 +241,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
         }, {
-            rootMargin: '100px'
+            rootMargin: '50px'
         });
     }
 
@@ -164,16 +251,16 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // 预加载歌单数据
         api.getPlaylist(id).then(result => {
-            console.log(`Preloaded playlist: ${title}`);
+            console.log(`预加载歌单: ${title}`);
         }).catch(error => {
-            console.log(`Failed to preload playlist: ${title}`, error);
+            console.log(`预加载失败: ${title}`, error);
         });
     }
 
     // --- UI RENDERING ---
     function renderTopLists(lists) {
-        console.log('Rendering toplists:', lists);
-        mainContent.innerHTML = '<div class="top-lists"></div>';
+        console.log('渲染榜单:', lists);
+        safeSetInnerHTML(mainContent, '<div class="top-lists"></div>');
         const container = mainContent.querySelector('.top-lists');
         
         lists.forEach((group, groupIndex) => {
@@ -182,18 +269,19 @@ document.addEventListener('DOMContentLoaded', () => {
                     const item = document.createElement('div');
                     item.className = 'list-item';
                     item.dataset.id = list.id;
-                    item.style.animationDelay = `${(groupIndex * group.data.length + listIndex) * 0.1}s`;
+                    item.style.animationDelay = `${(groupIndex * group.data.length + listIndex) * 0.05}s`;
                     
                     const imageUrl = fixImageUrl(list.coverImg);
-                    const title = escapeHtml(list.title || '未知标题');
-                    const description = escapeHtml(list.description || '');
+                    const title = sanitizeHtml(list.title || '未知标题');
+                    const description = sanitizeHtml(list.description || '');
                     
-                    item.innerHTML = `
-                        <img src="${imageUrl}" alt="${title}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"200\\" height=\\"200\\"><rect width=\\"200\\" height=\\"200\\" fill=\\"%23333\\"/><text x=\\"50%\\" y=\\"50%\\" text-anchor=\\"middle\\" fill=\\"white\\" font-size=\\"16\\">${escapeHtml(list.title || '榜单')}</text></svg>'">
+                    safeSetInnerHTML(item, `
+                        <img src="${imageUrl}" alt="${title}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"200\\" height=\\"200\\"><rect width=\\"200\\" height=\\"200\\" fill=\\"%23333\\"/><text x=\\"50%\\" y=\\"50%\\" text-anchor=\\"middle\\" fill=\\"white\\" font-size=\\"16\\">榜单</text></svg>'">
                         <p>${title}</p>
                         <small>${description}</small>
-                    `;
-                    item.addEventListener('click', () => loadPlaylist(list.id, unescapeHtml(title)));
+                    `);
+                    
+                    item.addEventListener('click', () => loadPlaylist(list.id, decodeHtml(title)));
                     container.appendChild(item);
                     
                     // 添加到懒加载观察器
@@ -207,20 +295,20 @@ document.addEventListener('DOMContentLoaded', () => {
         // 添加导入歌单选项
         const importItem = document.createElement('div');
         importItem.className = 'list-item import-item';
-        importItem.innerHTML = `
+        safeSetInnerHTML(importItem, `
             <div class="import-content">
                 <i class="fas fa-plus"></i>
                 <p>导入歌单</p>
             </div>
-        `;
+        `);
         importItem.addEventListener('click', showImportDialog);
         container.appendChild(importItem);
     }
 
     function renderPlaylist(playlist, title = '歌单') {
-        console.log('Rendering playlist:', playlist);
-        const safeTitle = escapeHtml(title);
-        mainContent.innerHTML = `
+        console.log('渲染歌单:', playlist);
+        const safeTitle = sanitizeHtml(title);
+        safeSetInnerHTML(mainContent, `
             <div class="playlist-header">
                 <button onclick="showHomePage()" class="back-btn">
                     <i class="fas fa-arrow-left"></i> 返回主页
@@ -228,22 +316,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 <h2>${safeTitle} (${playlist.length} 首)</h2>
             </div>
             <div class="playlist"></div>
-        `;
+        `);
         const container = mainContent.querySelector('.playlist');
         state.currentPlaylist = playlist;
+        
+        // 使用DocumentFragment优化DOM操作
+        const fragment = document.createDocumentFragment();
         
         playlist.forEach((song, index) => {
             const item = document.createElement('div');
             item.className = 'song-item';
             item.dataset.index = index;
-            item.style.animationDelay = `${index * 0.02}s`;
+            item.style.animationDelay = `${index * 0.01}s`;
             
             const imageUrl = fixImageUrl(song.artwork);
-            const songTitle = escapeHtml(song.title || '未知歌曲');
-            const songArtist = escapeHtml(song.artist || '未知歌手');
+            const songTitle = sanitizeHtml(song.title || '未知歌曲');
+            const songArtist = sanitizeHtml(song.artist || '未知歌手');
             
-            item.innerHTML = `
-                <span class="song-number">${(index + 1).toString().padStart(2, '0')}</span>
+            safeSetInnerHTML(item, `
+                <span class="song-number">${String(index + 1).padStart(2, '0')}</span>
                 <img src="${imageUrl}" alt="${songTitle}" class="artwork" width="40" height="40" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"40\\" height=\\"40\\"><rect width=\\"40\\" height=\\"40\\" fill=\\"%23555\\"/></svg>'">
                 <div class="song-item-info">
                     <p class="song-title" title="${songTitle}">${songTitle}</p>
@@ -254,10 +345,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         <i class="fas fa-play"></i>
                     </button>
                 </div>
-            `;
+            `);
             item.addEventListener('click', () => playSong(index));
-            container.appendChild(item);
+            fragment.appendChild(item);
         });
+        
+        container.appendChild(fragment);
     }
     
     function renderSearchResults(results) {
@@ -268,12 +361,272 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // --- FULLSCREEN LYRIC PAGE ---
+    function showFullscreenLyric() {
+        if (!state.currentSong) {
+            alert('请先播放一首歌曲');
+            return;
+        }
+
+        // 创建全屏歌词页面
+        const lyricPage = document.createElement('div');
+        lyricPage.className = 'lyric-fullscreen';
+        lyricPage.id = 'lyricFullscreen';
+        
+        const currentSongTitle = sanitizeHtml(state.currentSong?.title || '未知歌曲');
+        const currentSongArtist = sanitizeHtml(state.currentSong?.artist || '未知歌手');
+        
+        safeSetInnerHTML(lyricPage, `
+            <div class="lyric-background">
+                <img src="${fixImageUrl(state.currentSong?.artwork)}" alt="背景" class="lyric-bg-image">
+                <div class="lyric-bg-overlay"></div>
+            </div>
+            
+            <div class="lyric-header">
+                <button class="lyric-close-btn" onclick="closeLyricFullscreen()">
+                    <i class="fas fa-chevron-down"></i>
+                </button>
+                <div class="lyric-song-info">
+                    <h3 class="lyric-song-title">${currentSongTitle}</h3>
+                    <p class="lyric-song-artist">${currentSongArtist}</p>
+                </div>
+                <button class="lyric-fullscreen-btn" onclick="toggleLyricFullscreen()">
+                    <i class="fas fa-expand"></i>
+                </button>
+            </div>
+            
+            <div class="lyric-content-wrapper" id="lyricContentWrapper">
+                <div class="lyric-scroll-area" id="lyricScrollArea">
+                    ${lyricContent.innerHTML || '<div class="lyric-placeholder">暂无歌词</div>'}
+                </div>
+            </div>
+            
+            <div class="lyric-mini-player">
+                <div class="lyric-progress">
+                    <div class="lyric-progress-bar" id="lyricProgressBar">
+                        <div class="lyric-progress-fill" id="lyricProgressFill"></div>
+                    </div>
+                    <div class="lyric-time">
+                        <span id="lyricCurrentTime">0:00</span>
+                        <span id="lyricDuration">0:00</span>
+                    </div>
+                </div>
+                <div class="lyric-controls">
+                    <button class="lyric-control-btn" onclick="prevSong()">
+                        <i class="fas fa-step-backward"></i>
+                    </button>
+                    <button class="lyric-control-btn lyric-play-btn" onclick="togglePlayPause()" id="lyricPlayBtn">
+                        <i class="fas ${state.isPlaying ? 'fa-pause' : 'fa-play'}"></i>
+                    </button>
+                    <button class="lyric-control-btn" onclick="nextSong()">
+                        <i class="fas fa-step-forward"></i>
+                    </button>
+                </div>
+            </div>
+        `);
+        
+        // 添加到body
+        document.body.appendChild(lyricPage);
+        
+        // 添加滑动手势支持
+        setupLyricGestures(lyricPage);
+        
+        // 动画效果
+        requestAnimationFrame(() => {
+            lyricPage.classList.add('show');
+        });
+        
+        // 同步当前播放进度
+        updateLyricPageProgress();
+        
+        // 自动滚动到当前歌词
+        setTimeout(() => {
+            const activeLine = lyricPage.querySelector('.lyric-line.active');
+            if (activeLine) {
+                scrollToLyricLine(activeLine);
+            }
+        }, 300);
+    }
+
+    function setupLyricGestures(lyricPage) {
+        let startY = 0;
+        let currentY = 0;
+        let isDragging = false;
+        let startTime = 0;
+        
+        const header = lyricPage.querySelector('.lyric-header');
+        const contentWrapper = lyricPage.querySelector('.lyric-content-wrapper');
+        
+        // 触摸事件
+        const handleTouchStart = (e) => {
+            startY = e.touches[0].clientY;
+            startTime = Date.now();
+            isDragging = true;
+            lyricPage.style.transition = 'none';
+        };
+        
+        const handleTouchMove = (e) => {
+            if (!isDragging) return;
+            
+            currentY = e.touches[0].clientY;
+            const deltaY = currentY - startY;
+            
+            // 只允许向下滑动
+            if (deltaY > 0) {
+                const progress = Math.min(deltaY / window.innerHeight, 1);
+                const scale = 1 - progress * 0.1;
+                const opacity = 1 - progress * 0.3;
+                
+                lyricPage.style.transform = `translateY(${deltaY}px) scale(${scale})`;
+                lyricPage.style.opacity = opacity;
+                
+                // 防止内容滚动
+                e.preventDefault();
+            }
+        };
+        
+        const handleTouchEnd = (e) => {
+            if (!isDragging) return;
+            isDragging = false;
+            
+            const deltaY = currentY - startY;
+            const deltaTime = Date.now() - startTime;
+            const velocity = deltaY / deltaTime;
+            
+            lyricPage.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+            
+            // 判断是否关闭
+            if (deltaY > window.innerHeight * 0.3 || velocity > 0.5) {
+                closeLyricFullscreen();
+            } else {
+                // 回弹
+                lyricPage.style.transform = 'translateY(0) scale(1)';
+                lyricPage.style.opacity = '1';
+            }
+        };
+        
+        // 绑定事件
+        header.addEventListener('touchstart', handleTouchStart, { passive: false });
+        header.addEventListener('touchmove', handleTouchMove, { passive: false });
+        header.addEventListener('touchend', handleTouchEnd);
+        
+        // 鼠标事件（PC端）
+        header.addEventListener('mousedown', (e) => {
+            startY = e.clientY;
+            startTime = Date.now();
+            isDragging = true;
+            lyricPage.style.transition = 'none';
+            
+            const handleMouseMove = (e) => {
+                if (!isDragging) return;
+                
+                currentY = e.clientY;
+                const deltaY = currentY - startY;
+                
+                if (deltaY > 0) {
+                    const progress = Math.min(deltaY / window.innerHeight, 1);
+                    const scale = 1 - progress * 0.1;
+                    const opacity = 1 - progress * 0.3;
+                    
+                    lyricPage.style.transform = `translateY(${deltaY}px) scale(${scale})`;
+                    lyricPage.style.opacity = opacity;
+                }
+            };
+            
+            const handleMouseUp = () => {
+                if (!isDragging) return;
+                isDragging = false;
+                
+                const deltaY = currentY - startY;
+                const deltaTime = Date.now() - startTime;
+                const velocity = deltaY / deltaTime;
+                
+                lyricPage.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+                
+                if (deltaY > window.innerHeight * 0.3 || velocity > 0.5) {
+                    closeLyricFullscreen();
+                } else {
+                    lyricPage.style.transform = 'translateY(0) scale(1)';
+                    lyricPage.style.opacity = '1';
+                }
+                
+                document.removeEventListener('mousemove', handleMouseMove);
+                document.removeEventListener('mouseup', handleMouseUp);
+            };
+            
+            document.addEventListener('mousemove', handleMouseMove);
+            document.addEventListener('mouseup', handleMouseUp);
+        });
+    }
+
+    function scrollToLyricLine(activeLine) {
+        const container = document.getElementById('lyricScrollArea');
+        if (!container || !activeLine) return;
+        
+        const containerHeight = container.clientHeight;
+        const lineTop = activeLine.offsetTop;
+        const lineHeight = activeLine.clientHeight;
+        const scrollTop = lineTop - (containerHeight / 2) + (lineHeight / 2);
+        
+        // 使用平滑滚动
+        container.scrollTo({
+            top: Math.max(0, scrollTop),
+            behavior: 'smooth'
+        });
+    }
+
+    function updateLyricPageProgress() {
+        const lyricProgressFill = document.getElementById('lyricProgressFill');
+        const lyricCurrentTime = document.getElementById('lyricCurrentTime');
+        const lyricDuration = document.getElementById('lyricDuration');
+        
+        if (lyricProgressFill && audioPlayer.duration) {
+            const progress = (audioPlayer.currentTime / audioPlayer.duration) * 100;
+            lyricProgressFill.style.width = `${progress}%`;
+        }
+        
+        if (lyricCurrentTime) {
+            lyricCurrentTime.textContent = formatTime(audioPlayer.currentTime);
+        }
+        
+        if (lyricDuration) {
+            lyricDuration.textContent = formatTime(audioPlayer.duration);
+        }
+    }
+
+    window.closeLyricFullscreen = () => {
+        const lyricPage = document.getElementById('lyricFullscreen');
+        if (lyricPage) {
+            lyricPage.classList.add('hide');
+            setTimeout(() => {
+                if (lyricPage.parentNode) {
+                    lyricPage.parentNode.removeChild(lyricPage);
+                }
+            }, 300);
+        }
+    };
+
+    window.toggleLyricFullscreen = () => {
+        const lyricPage = document.getElementById('lyricFullscreen');
+        if (lyricPage) {
+            lyricPage.classList.toggle('fullscreen');
+            const btn = lyricPage.querySelector('.lyric-fullscreen-btn i');
+            if (btn) {
+                if (lyricPage.classList.contains('fullscreen')) {
+                    btn.className = 'fas fa-compress';
+                } else {
+                    btn.className = 'fas fa-expand';
+                }
+            }
+        }
+    };
+
     // --- IMPORT PLAYLIST DIALOG ---
     function showImportDialog() {
         const dialog = document.createElement('div');
         dialog.className = 'modal-overlay';
         
-        dialog.innerHTML = `
+        safeSetInnerHTML(dialog, `
             <div class="modal-content">
                 <div class="modal-header">
                     <h3>导入歌单</h3>
@@ -296,7 +649,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <button onclick="importPlaylist()" class="btn-confirm">导入</button>
                 </div>
             </div>
-        `;
+        `);
         
         document.body.appendChild(dialog);
         document.getElementById('importUrl').focus();
@@ -306,58 +659,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 dialog.remove();
             }
         });
-    }
-
-    // --- LYRIC MODAL ---
-    function showLyricModal() {
-        const modal = document.createElement('div');
-        modal.className = 'lyric-modal-overlay';
-        const currentSongTitle = escapeHtml(state.currentSong?.title || '未知歌曲');
-        const currentSongArtist = escapeHtml(state.currentSong?.artist || '未知歌手');
-        
-        modal.innerHTML = `
-            <div class="lyric-modal">
-                <div class="lyric-modal-header">
-                    <div class="song-info">
-                        <img src="${fixImageUrl(state.currentSong?.artwork)}" alt="歌曲封面" class="modal-artwork">
-                        <div>
-                            <h3>${currentSongTitle}</h3>
-                            <p>${currentSongArtist}</p>
-                        </div>
-                    </div>
-                    <button class="close-btn" onclick="this.closest('.lyric-modal-overlay').remove()">
-                        <i class="fas fa-times"></i>
-                    </button>
-                </div>
-                <div class="lyric-modal-content" id="modalLyricContent">
-                    ${lyricContent.innerHTML}
-                </div>
-            </div>
-        `;
-        
-        document.body.appendChild(modal);
-        
-        // 自动滚动到当前歌词
-        setTimeout(() => {
-            const activeLine = modal.querySelector('.lyric-line.active');
-            if (activeLine) {
-                activeLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
-        }, 100);
-        
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
-                modal.remove();
-            }
-        });
-        
-        const handleEsc = (e) => {
-            if (e.key === 'Escape') {
-                modal.remove();
-                document.removeEventListener('keydown', handleEsc);
-            }
-        };
-        document.addEventListener('keydown', handleEsc);
     }
 
     // --- PLAYER LOGIC ---
@@ -370,7 +671,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 showError('无法加载歌单');
             }
         }).catch(error => {
-            console.error('Failed to load playlist:', error);
+            console.error('加载歌单失败:', error);
             showError('加载歌单失败');
         });
     }
@@ -392,10 +693,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const playBtn = item.querySelector('.action-btn i');
             if (index === state.currentIndex && state.isPlaying) {
                 item.classList.add('playing');
-                playBtn.className = 'fas fa-pause';
+                if (playBtn) playBtn.className = 'fas fa-pause';
             } else {
                 item.classList.remove('playing');
-                playBtn.className = 'fas fa-play';
+                if (playBtn) playBtn.className = 'fas fa-play';
             }
         });
     }
@@ -404,9 +705,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!state.currentSong) return;
         const imageUrl = fixImageUrl(state.currentSong.artwork);
         songArtwork.src = imageUrl;
-        songTitle.textContent = unescapeHtml(state.currentSong.title || '未知歌曲');
-        songArtist.textContent = unescapeHtml(state.currentSong.artist || '未知歌手');
+        songTitle.textContent = decodeHtml(state.currentSong.title || '未知歌曲');
+        songArtist.textContent = decodeHtml(state.currentSong.artist || '未知歌手');
         playPauseBtn.innerHTML = state.isPlaying ? '<i class="fas fa-pause"></i>' : '<i class="fas fa-play"></i>';
+        
+        // 更新歌词页面播放按钮
+        const lyricPlayBtn = document.getElementById('lyricPlayBtn');
+        if (lyricPlayBtn) {
+            lyricPlayBtn.innerHTML = state.isPlaying ? '<i class="fas fa-pause"></i>' : '<i class="fas fa-play"></i>';
+        }
     }
 
     async function loadSongMedia() {
@@ -424,7 +731,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 nextSong();
             }
         } catch (error) {
-            console.error('Failed to load song media:', error);
+            console.error('播放失败:', error);
             alert('播放失败');
         } finally {
             state.isBuffering = false;
@@ -468,7 +775,17 @@ document.addEventListener('DOMContentLoaded', () => {
             progressFill.style.width = `${progress}%`;
             currentTimeEl.textContent = formatTime(audioPlayer.currentTime);
             totalDurationEl.textContent = formatTime(audioPlayer.duration);
-            updateLyricHighlight();
+            
+            // 更新歌词页面进度
+            updateLyricPageProgress();
+            
+            // 节流更新歌词高亮
+            if (state.lyricScrollTimer) {
+                clearTimeout(state.lyricScrollTimer);
+            }
+            state.lyricScrollTimer = setTimeout(() => {
+                updateLyricHighlight();
+            }, 100);
         }
     }
 
@@ -487,6 +804,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function formatTime(seconds) {
+        if (!seconds || isNaN(seconds)) return '0:00';
         const minutes = Math.floor(seconds / 60);
         const secs = Math.floor(seconds % 60);
         return `${minutes}:${secs.toString().padStart(2, '0')}`;
@@ -494,7 +812,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- LYRIC LOGIC ---
     async function loadLyrics() {
-        lyricContent.innerHTML = '<div style="text-align: center; padding: 50px; color: #888;">加载歌词中...</div>';
+        safeSetInnerHTML(lyricContent, '<div style="text-align: center; padding: 50px; color: #888;">加载歌词中...</div>');
         state.lyrics = [];
         
         try {
@@ -502,11 +820,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (result && result.rawLrc) {
                 parseLyrics(result.rawLrc);
             } else {
-                lyricContent.innerHTML = '<div style="text-align: center; padding: 50px; color: #888;">暂无歌词</div>';
+                safeSetInnerHTML(lyricContent, '<div style="text-align: center; padding: 50px; color: #888;">暂无歌词</div>');
             }
         } catch (error) {
-            console.error('Failed to load lyrics:', error);
-            lyricContent.innerHTML = '<div style="text-align: center; padding: 50px; color: #ff6b6b;">歌词加载失败</div>';
+            console.error('歌词加载失败:', error);
+            safeSetInnerHTML(lyricContent, '<div style="text-align: center; padding: 50px; color: #ff6b6b;">歌词加载失败</div>');
         }
     }
 
@@ -522,7 +840,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const time = minutes * 60 + seconds + milliseconds / 1000;
                 const text = match[4].trim();
                 if (text) {
-                    state.lyrics.push({ time, text });
+                    state.lyrics.push({ time, text: sanitizeHtml(text) });
                 }
             }
         }
@@ -530,23 +848,34 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     function renderLyrics() {
-        lyricContent.innerHTML = '';
         if (state.lyrics.length === 0) {
-            lyricContent.innerHTML = '<div style="text-align: center; padding: 50px; color: #888;">暂无歌词</div>';
+            safeSetInnerHTML(lyricContent, '<div style="text-align: center; padding: 50px; color: #888;">暂无歌词</div>');
             return;
         }
         
+        // 使用DocumentFragment优化DOM操作
+        const fragment = document.createDocumentFragment();
+        
         state.lyrics.forEach((line, index) => {
             const p = document.createElement('p');
-            p.textContent = line.text;
+            p.textContent = decodeHtml(line.text);
             p.dataset.time = line.time;
             p.dataset.index = index;
             p.className = 'lyric-line';
             p.addEventListener('click', () => {
                 audioPlayer.currentTime = line.time;
             });
-            lyricContent.appendChild(p);
+            fragment.appendChild(p);
         });
+        
+        lyricContent.innerHTML = '';
+        lyricContent.appendChild(fragment);
+        
+        // 同步到歌词页面
+        const lyricScrollArea = document.getElementById('lyricScrollArea');
+        if (lyricScrollArea) {
+            safeSetInnerHTML(lyricScrollArea, lyricContent.innerHTML);
+        }
     }
 
     function updateLyricHighlight() {
@@ -563,45 +892,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (activeLine !== null) {
             // 更新隐藏面板歌词
-            const allLines = document.querySelectorAll('.lyric-line');
+            const allLines = document.querySelectorAll('#lyricContent .lyric-line');
             allLines.forEach((p, index) => {
                 if (index === activeLine) {
                     p.classList.add('active');
-                    // 平滑滚动到当前歌词
-                    if (p.parentElement && p.parentElement.scrollTo) {
-                        const container = p.parentElement;
-                        const containerHeight = container.clientHeight;
-                        const elementTop = p.offsetTop;
-                        const elementHeight = p.clientHeight;
-                        const scrollTop = elementTop - (containerHeight / 2) + (elementHeight / 2);
-                        
-                        container.scrollTo({
-                            top: scrollTop,
-                            behavior: 'smooth'
-                        });
-                    }
                 } else {
                     p.classList.remove('active');
                 }
             });
             
-            // 同步模态框中的歌词
-            const modalLines = document.querySelectorAll('#modalLyricContent .lyric-line');
-            modalLines.forEach((p, index) => {
+            // 更新歌词页面
+            const lyricPageLines = document.querySelectorAll('#lyricScrollArea .lyric-line');
+            lyricPageLines.forEach((p, index) => {
                 if (index === activeLine) {
                     p.classList.add('active');
-                    if (p.parentElement && p.parentElement.scrollTo) {
-                        const container = p.parentElement;
-                        const containerHeight = container.clientHeight;
-                        const elementTop = p.offsetTop;
-                        const elementHeight = p.clientHeight;
-                        const scrollTop = elementTop - (containerHeight / 2) + (elementHeight / 2);
-                        
-                        container.scrollTo({
-                            top: scrollTop,
-                            behavior: 'smooth'
-                        });
-                    }
+                    // 平滑滚动到当前歌词
+                    scrollToLyricLine(p);
                 } else {
                     p.classList.remove('active');
                 }
@@ -615,6 +921,9 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     window.playSong = playSong;
+    window.togglePlayPause = togglePlayPause;
+    window.prevSong = prevSong;
+    window.nextSong = nextSong;
 
     window.importPlaylist = async () => {
         const url = document.getElementById('importUrl').value.trim();
@@ -628,12 +937,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const result = await api.importPlaylist(url);
             if (result && result.data) {
                 renderPlaylist(result.data, '导入的歌单');
-                document.querySelector('.modal-overlay').remove();
+                const modal = document.querySelector('.modal-overlay');
+                if (modal) modal.remove();
             } else {
                 showError('导入歌单失败');
             }
         } catch (error) {
-            console.error('Import failed:', error);
+            console.error('导入失败:', error);
             showError('导入歌单失败：' + error.message);
         }
     };
@@ -646,7 +956,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const a = document.createElement('a');
         a.href = audioPlayer.src;
-        a.download = `${unescapeHtml(state.currentSong.title)} - ${unescapeHtml(state.currentSong.artist)}.mp3`;
+        a.download = `${decodeHtml(state.currentSong.title)} - ${decodeHtml(state.currentSong.artist)}.mp3`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -697,33 +1007,27 @@ document.addEventListener('DOMContentLoaded', () => {
             state.isBuffering = false;
         });
         
-        searchBtn.addEventListener('click', () => {
-            if (searchInput.value) {
+        // 搜索功能
+        const performSearch = () => {
+            const query = searchInput.value.trim();
+            if (query) {
                 showLoading('正在搜索...');
-                api.search(searchInput.value).then(renderSearchResults).catch(error => {
-                    console.error('Search failed:', error);
+                api.search(query).then(renderSearchResults).catch(error => {
+                    console.error('搜索失败:', error);
                     showError('搜索失败');
                 });
             }
-        });
+        };
         
+        searchBtn.addEventListener('click', performSearch);
         searchInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && searchInput.value) {
-                showLoading('正在搜索...');
-                api.search(searchInput.value).then(renderSearchResults).catch(error => {
-                    console.error('Search failed:', error);
-                    showError('搜索失败');
-                });
+            if (e.key === 'Enter') {
+                performSearch();
             }
         });
 
-        lyricBtn.addEventListener('click', () => {
-            if (state.currentSong) {
-                showLyricModal();
-            } else {
-                alert('请先播放一首歌曲');
-            }
-        });
+        // 歌词按钮 - 改为显示全屏歌词页面
+        lyricBtn.addEventListener('click', showFullscreenLyric);
         
         qualitySelect.addEventListener('change', () => {
             if (state.currentSong) {
@@ -732,6 +1036,29 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         
         downloadBtn.addEventListener('click', downloadSong);
+        
+        // 键盘快捷键
+        document.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT') return;
+            
+            switch (e.code) {
+                case 'Space':
+                    e.preventDefault();
+                    togglePlayPause();
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    prevSong();
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    nextSong();
+                    break;
+                case 'Escape':
+                    closeLyricFullscreen();
+                    break;
+            }
+        });
     }
 
     // --- INITIALIZATION ---
@@ -740,14 +1067,14 @@ document.addEventListener('DOMContentLoaded', () => {
         setupLazyLoading();
         
         api.getTopLists().then(result => {
-            console.log('Received toplists:', result);
+            console.log('获取榜单:', result);
             if (result && Array.isArray(result)) {
                 renderTopLists(result);
             } else {
                 showError('无法加载排行榜');
             }
         }).catch(error => {
-            console.error('Failed to load toplists:', error);
+            console.error('加载榜单失败:', error);
             showError('加载排行榜失败');
         });
         
@@ -755,4 +1082,4 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     init();
-}); 
+});

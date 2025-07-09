@@ -8,6 +8,8 @@ document.addEventListener('DOMContentLoaded', () => {
         lyrics: [],
         cache: new Map(),
         isDragging: false,
+        isBuffering: false,
+        lazyLoadObserver: null,
     };
 
     // --- DOM ELEMENTS ---
@@ -23,6 +25,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const songTitle = document.getElementById('songTitle');
     const songArtist = document.getElementById('songArtist');
     const progressBar = document.getElementById('progressBar');
+    const progressFill = document.getElementById('progressFill');
+    const progressBuffer = document.getElementById('progressBuffer');
     const currentTimeEl = document.getElementById('currentTime');
     const totalDurationEl = document.getElementById('totalDuration');
     const qualitySelect = document.getElementById('qualitySelect');
@@ -44,7 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function getCache(key) {
         const cached = state.cache.get(key);
-        if (cached && Date.now() - cached.timestamp < 10 * 60 * 1000) { // 10分钟缓存
+        if (cached && Date.now() - cached.timestamp < 10 * 60 * 1000) {
             return cached.data;
         }
         state.cache.delete(key);
@@ -56,6 +60,47 @@ document.addEventListener('DOMContentLoaded', () => {
             data,
             timestamp: Date.now()
         });
+    }
+
+    // --- UTILITY FUNCTIONS ---
+    function fixImageUrl(url) {
+        if (!url) return 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="%23333"/><text x="50%" y="50%" text-anchor="middle" fill="white" font-size="20">封面</text></svg>';
+        return url.replace(/^http:/, 'https:');
+    }
+
+    function escapeHtml(unsafe) {
+        if (!unsafe) return '';
+        return unsafe
+            .toString()
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
+    function unescapeHtml(safe) {
+        if (!safe) return '';
+        return safe
+            .toString()
+            .replace(/&amp;/g, "&")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&quot;/g, '"')
+            .replace(/&#039;/g, "'");
+    }
+
+    function showLoading(message = '加载中...') {
+        mainContent.innerHTML = `
+            <div class="loading-container">
+                <div class="loading-spinner"></div>
+                <div class="loading-text">${escapeHtml(message)}</div>
+                <div class="loading-tips">数据正在加载，请稍候...</div>
+            </div>`;
+    }
+
+    function showError(message) {
+        mainContent.innerHTML = `<div class="error-container"><i class="fas fa-exclamation-triangle"></i><div>${escapeHtml(message)}</div></div>`;
     }
 
     // --- API HELPERS ---
@@ -92,29 +137,37 @@ document.addEventListener('DOMContentLoaded', () => {
         importPlaylist: (url) => fetch(`${API_BASE_URL}/import-playlist?url=${encodeURIComponent(url)}`).then(res => res.json()),
     };
 
-    // --- UTILITY FUNCTIONS ---
-    function fixImageUrl(url) {
-        if (!url) return 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="%23333"/><text x="50%" y="50%" text-anchor="middle" fill="white" font-size="20">封面</text></svg>';
-        return url.replace(/^http:/, 'https:');
+    // --- LAZY LOADING ---
+    function setupLazyLoading() {
+        if (state.lazyLoadObserver) {
+            state.lazyLoadObserver.disconnect();
+        }
+
+        state.lazyLoadObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const element = entry.target;
+                    if (element.dataset.id && !element.dataset.loaded) {
+                        element.dataset.loaded = 'true';
+                        loadPlaylistData(element);
+                    }
+                }
+            });
+        }, {
+            rootMargin: '100px'
+        });
     }
 
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    function showLoading(message = '加载中...') {
-        mainContent.innerHTML = `
-            <div class="loading-container">
-                <div class="loading-spinner"></div>
-                <div class="loading-text">${message}</div>
-                <div class="loading-tips">数据正在加载，请稍候...</div>
-            </div>`;
-    }
-
-    function showError(message) {
-        mainContent.innerHTML = `<div class="error-container"><i class="fas fa-exclamation-triangle"></i><div>${escapeHtml(message)}</div></div>`;
+    function loadPlaylistData(element) {
+        const id = element.dataset.id;
+        const title = element.querySelector('p').textContent;
+        
+        // 预加载歌单数据
+        api.getPlaylist(id).then(result => {
+            console.log(`Preloaded playlist: ${title}`);
+        }).catch(error => {
+            console.log(`Failed to preload playlist: ${title}`, error);
+        });
     }
 
     // --- UI RENDERING ---
@@ -129,7 +182,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     const item = document.createElement('div');
                     item.className = 'list-item';
                     item.dataset.id = list.id;
-                    // 添加渐入动画延迟
                     item.style.animationDelay = `${(groupIndex * group.data.length + listIndex) * 0.1}s`;
                     
                     const imageUrl = fixImageUrl(list.coverImg);
@@ -137,12 +189,17 @@ document.addEventListener('DOMContentLoaded', () => {
                     const description = escapeHtml(list.description || '');
                     
                     item.innerHTML = `
-                        <img src="${imageUrl}" alt="${title}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"200\\" height=\\"200\\"><rect width=\\"200\\" height=\\"200\\" fill=\\"%23333\\"/><text x=\\"50%\\" y=\\"50%\\" text-anchor=\\"middle\\" fill=\\"white\\" font-size=\\"16\\">${title}</text></svg>'">
+                        <img src="${imageUrl}" alt="${title}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"200\\" height=\\"200\\"><rect width=\\"200\\" height=\\"200\\" fill=\\"%23333\\"/><text x=\\"50%\\" y=\\"50%\\" text-anchor=\\"middle\\" fill=\\"white\\" font-size=\\"16\\">${escapeHtml(list.title || '榜单')}</text></svg>'">
                         <p>${title}</p>
                         <small>${description}</small>
                     `;
-                    item.addEventListener('click', () => loadPlaylist(list.id, title));
+                    item.addEventListener('click', () => loadPlaylist(list.id, unescapeHtml(title)));
                     container.appendChild(item);
+                    
+                    // 添加到懒加载观察器
+                    if (state.lazyLoadObserver) {
+                        state.lazyLoadObserver.observe(item);
+                    }
                 });
             }
         });
@@ -162,12 +219,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderPlaylist(playlist, title = '歌单') {
         console.log('Rendering playlist:', playlist);
+        const safeTitle = escapeHtml(title);
         mainContent.innerHTML = `
             <div class="playlist-header">
                 <button onclick="showHomePage()" class="back-btn">
                     <i class="fas fa-arrow-left"></i> 返回主页
                 </button>
-                <h2>${escapeHtml(title)} (${playlist.length} 首)</h2>
+                <h2>${safeTitle} (${playlist.length} 首)</h2>
             </div>
             <div class="playlist"></div>
         `;
@@ -178,19 +236,18 @@ document.addEventListener('DOMContentLoaded', () => {
             const item = document.createElement('div');
             item.className = 'song-item';
             item.dataset.index = index;
-            // 添加渐入动画延迟
             item.style.animationDelay = `${index * 0.02}s`;
             
             const imageUrl = fixImageUrl(song.artwork);
-            const title = escapeHtml(song.title || '未知歌曲');
-            const artist = escapeHtml(song.artist || '未知歌手');
+            const songTitle = escapeHtml(song.title || '未知歌曲');
+            const songArtist = escapeHtml(song.artist || '未知歌手');
             
             item.innerHTML = `
                 <span class="song-number">${(index + 1).toString().padStart(2, '0')}</span>
-                <img src="${imageUrl}" alt="${title}" class="artwork" width="40" height="40" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"40\\" height=\\"40\\"><rect width=\\"40\\" height=\\"40\\" fill=\\"%23555\\"/></svg>'">
+                <img src="${imageUrl}" alt="${songTitle}" class="artwork" width="40" height="40" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"40\\" height=\\"40\\"><rect width=\\"40\\" height=\\"40\\" fill=\\"%23555\\"/></svg>'">
                 <div class="song-item-info">
-                    <p class="song-title">${title}</p>
-                    <p class="song-artist">${artist}</p>
+                    <p class="song-title" title="${songTitle}">${songTitle}</p>
+                    <p class="song-artist" title="${songArtist}">${songArtist}</p>
                 </div>
                 <div class="song-actions">
                     <button class="action-btn" onclick="playSong(${index})" title="播放">
@@ -244,7 +301,6 @@ document.addEventListener('DOMContentLoaded', () => {
         document.body.appendChild(dialog);
         document.getElementById('importUrl').focus();
         
-        // 点击背景关闭
         dialog.addEventListener('click', (e) => {
             if (e.target === dialog) {
                 dialog.remove();
@@ -256,14 +312,17 @@ document.addEventListener('DOMContentLoaded', () => {
     function showLyricModal() {
         const modal = document.createElement('div');
         modal.className = 'lyric-modal-overlay';
+        const currentSongTitle = escapeHtml(state.currentSong?.title || '未知歌曲');
+        const currentSongArtist = escapeHtml(state.currentSong?.artist || '未知歌手');
+        
         modal.innerHTML = `
             <div class="lyric-modal">
                 <div class="lyric-modal-header">
                     <div class="song-info">
                         <img src="${fixImageUrl(state.currentSong?.artwork)}" alt="歌曲封面" class="modal-artwork">
                         <div>
-                            <h3>${escapeHtml(state.currentSong?.title || '未知歌曲')}</h3>
-                            <p>${escapeHtml(state.currentSong?.artist || '未知歌手')}</p>
+                            <h3>${currentSongTitle}</h3>
+                            <p>${currentSongArtist}</p>
                         </div>
                     </div>
                     <button class="close-btn" onclick="this.closest('.lyric-modal-overlay').remove()">
@@ -278,14 +337,20 @@ document.addEventListener('DOMContentLoaded', () => {
         
         document.body.appendChild(modal);
         
-        // 点击背景关闭
+        // 自动滚动到当前歌词
+        setTimeout(() => {
+            const activeLine = modal.querySelector('.lyric-line.active');
+            if (activeLine) {
+                activeLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }, 100);
+        
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
                 modal.remove();
             }
         });
         
-        // ESC键关闭
         const handleEsc = (e) => {
             if (e.key === 'Escape') {
                 modal.remove();
@@ -318,8 +383,6 @@ document.addEventListener('DOMContentLoaded', () => {
         updatePlayerUI();
         loadSongMedia();
         loadLyrics();
-        
-        // 更新歌曲列表中的播放状态
         updatePlaylistUI();
     }
 
@@ -341,13 +404,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!state.currentSong) return;
         const imageUrl = fixImageUrl(state.currentSong.artwork);
         songArtwork.src = imageUrl;
-        songTitle.textContent = state.currentSong.title;
-        songArtist.textContent = state.currentSong.artist;
+        songTitle.textContent = unescapeHtml(state.currentSong.title || '未知歌曲');
+        songArtist.textContent = unescapeHtml(state.currentSong.artist || '未知歌手');
         playPauseBtn.innerHTML = state.isPlaying ? '<i class="fas fa-pause"></i>' : '<i class="fas fa-play"></i>';
     }
 
     async function loadSongMedia() {
         try {
+            state.isBuffering = true;
+            updateBufferProgress(0);
+            
             const quality = qualitySelect.value;
             const result = await api.getSongUrl(state.currentSong.id, quality);
             if (result && result.url) {
@@ -360,6 +426,8 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error('Failed to load song media:', error);
             alert('播放失败');
+        } finally {
+            state.isBuffering = false;
         }
     }
 
@@ -397,17 +465,24 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!state.isDragging && audioPlayer.duration) {
             const progress = (audioPlayer.currentTime / audioPlayer.duration) * 100;
             progressBar.value = progress;
-            // 更新进度条的CSS变量
-            progressBar.style.setProperty('--progress', `${progress}%`);
+            progressFill.style.width = `${progress}%`;
             currentTimeEl.textContent = formatTime(audioPlayer.currentTime);
             totalDurationEl.textContent = formatTime(audioPlayer.duration);
             updateLyricHighlight();
         }
     }
 
+    function updateBufferProgress(buffered) {
+        if (progressBuffer) {
+            progressBuffer.style.width = `${buffered}%`;
+        }
+    }
+
     function seek() {
         if (audioPlayer.duration) {
-            audioPlayer.currentTime = (progressBar.value / 100) * audioPlayer.duration;
+            const newTime = (progressBar.value / 100) * audioPlayer.duration;
+            audioPlayer.currentTime = newTime;
+            progressFill.style.width = `${progressBar.value}%`;
         }
     }
 
@@ -477,6 +552,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateLyricHighlight() {
         const currentTime = audioPlayer.currentTime;
         let activeLine = null;
+        
         for (let i = 0; i < state.lyrics.length; i++) {
             if (currentTime >= state.lyrics[i].time) {
                 activeLine = i;
@@ -486,11 +562,24 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (activeLine !== null) {
+            // 更新隐藏面板歌词
             const allLines = document.querySelectorAll('.lyric-line');
             allLines.forEach((p, index) => {
                 if (index === activeLine) {
                     p.classList.add('active');
-                    p.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    // 平滑滚动到当前歌词
+                    if (p.parentElement && p.parentElement.scrollTo) {
+                        const container = p.parentElement;
+                        const containerHeight = container.clientHeight;
+                        const elementTop = p.offsetTop;
+                        const elementHeight = p.clientHeight;
+                        const scrollTop = elementTop - (containerHeight / 2) + (elementHeight / 2);
+                        
+                        container.scrollTo({
+                            top: scrollTop,
+                            behavior: 'smooth'
+                        });
+                    }
                 } else {
                     p.classList.remove('active');
                 }
@@ -501,7 +590,18 @@ document.addEventListener('DOMContentLoaded', () => {
             modalLines.forEach((p, index) => {
                 if (index === activeLine) {
                     p.classList.add('active');
-                    p.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    if (p.parentElement && p.parentElement.scrollTo) {
+                        const container = p.parentElement;
+                        const containerHeight = container.clientHeight;
+                        const elementTop = p.offsetTop;
+                        const elementHeight = p.clientHeight;
+                        const scrollTop = elementTop - (containerHeight / 2) + (elementHeight / 2);
+                        
+                        container.scrollTo({
+                            top: scrollTop,
+                            behavior: 'smooth'
+                        });
+                    }
                 } else {
                     p.classList.remove('active');
                 }
@@ -546,7 +646,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const a = document.createElement('a');
         a.href = audioPlayer.src;
-        a.download = `${state.currentSong.title} - ${state.currentSong.artist}.mp3`;
+        a.download = `${unescapeHtml(state.currentSong.title)} - ${unescapeHtml(state.currentSong.artist)}.mp3`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -571,7 +671,7 @@ document.addEventListener('DOMContentLoaded', () => {
         progressBar.addEventListener('input', () => {
             if (state.isDragging) {
                 const progress = progressBar.value;
-                progressBar.style.setProperty('--progress', `${progress}%`);
+                progressFill.style.width = `${progress}%`;
                 if (audioPlayer.duration) {
                     currentTimeEl.textContent = formatTime((progress / 100) * audioPlayer.duration);
                 }
@@ -580,8 +680,22 @@ document.addEventListener('DOMContentLoaded', () => {
         
         progressBar.addEventListener('change', seek);
         
+        // 音频事件监听
         audioPlayer.addEventListener('timeupdate', updateProgress);
         audioPlayer.addEventListener('ended', nextSong);
+        audioPlayer.addEventListener('loadstart', () => {
+            state.isBuffering = true;
+            updateBufferProgress(0);
+        });
+        audioPlayer.addEventListener('progress', () => {
+            if (audioPlayer.buffered.length > 0 && audioPlayer.duration) {
+                const buffered = (audioPlayer.buffered.end(0) / audioPlayer.duration) * 100;
+                updateBufferProgress(buffered);
+            }
+        });
+        audioPlayer.addEventListener('canplay', () => {
+            state.isBuffering = false;
+        });
         
         searchBtn.addEventListener('click', () => {
             if (searchInput.value) {
@@ -623,6 +737,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- INITIALIZATION ---
     function init() {
         showLoading('正在加载排行榜...');
+        setupLazyLoading();
+        
         api.getTopLists().then(result => {
             console.log('Received toplists:', result);
             if (result && Array.isArray(result)) {
@@ -634,6 +750,7 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('Failed to load toplists:', error);
             showError('加载排行榜失败');
         });
+        
         setupEventListeners();
     }
 

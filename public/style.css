@@ -871,6 +871,18 @@ body {
     padding: 8px 12px;
 }
 
+/* 深色主题下option的特殊处理 */
+:root .quality-select option {
+    background: #1a1a1a;
+    color: white;
+}
+
+/* 浅色主题下option的特殊处理 */
+[data-theme="light"] .quality-select option {
+    background: #ffffff;
+    color: #212529;
+}
+
 .option-btn {
     width: 40px;
     height: 40px;

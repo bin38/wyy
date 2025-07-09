@@ -28,7 +28,7 @@
             </div>
             <div class="header-actions">
                 <button class="theme-toggle" title="切换主题">
-                    <i class="fas fa-moon"></i>
+                    <i class="fas fa-moon theme-icon"></i>
                 </button>
             </div>
         </div>
@@ -76,6 +76,14 @@
             </div>
             
             <div class="player-options">
+                <div class="volume-control">
+                    <button id="volumeBtn" class="option-btn" title="音量控制">
+                        <i class="fas fa-volume-up"></i>
+                    </button>
+                    <div class="volume-slider-container">
+                        <input type="range" id="volumeSlider" class="volume-slider" min="0" max="100" value="50" aria-label="音量调节">
+                    </div>
+                </div>
                 <select id="qualitySelect" class="quality-select" aria-label="音质选择">
                     <option value="standard">标准</option>
                     <option value="high">较高</option>

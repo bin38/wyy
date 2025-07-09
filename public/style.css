@@ -10,6 +10,7 @@ body {
     color: white;
     line-height: 1.6;
     min-height: 100vh;
+    padding-bottom: 120px; /* 为播放器留出空间 */
 }
 
 /* Header */
@@ -215,18 +216,20 @@ body {
     background: rgba(40, 40, 40, 0.95);
     backdrop-filter: blur(10px);
     border-top: 1px solid #444;
-    padding: 20px;
+    padding: 15px 20px;
     display: flex;
     align-items: center;
     gap: 20px;
     z-index: 1000;
+    height: 90px;
 }
 
 .player-info {
     display: flex;
     align-items: center;
     gap: 15px;
-    min-width: 250px;
+    min-width: 200px;
+    flex-shrink: 0;
 }
 
 .player-info img {
@@ -237,27 +240,27 @@ body {
 
 .player-info div h4 {
     margin: 0;
-    font-size: 16px;
+    font-size: 14px;
     font-weight: 600;
+    color: white;
 }
 
 .player-info div p {
     margin: 0;
     color: #aaa;
-    font-size: 14px;
+    font-size: 12px;
 }
 
 .player-controls {
     display: flex;
     align-items: center;
     gap: 15px;
-    flex: 1;
-    justify-content: center;
+    flex-shrink: 0;
 }
 
 .control-btn {
-    width: 48px;
-    height: 48px;
+    width: 42px;
+    height: 42px;
     border: none;
     border-radius: 50%;
     background: #333;
@@ -267,7 +270,7 @@ body {
     align-items: center;
     justify-content: center;
     transition: all 0.3s ease;
-    font-size: 18px;
+    font-size: 16px;
 }
 
 .control-btn:hover {
@@ -277,9 +280,9 @@ body {
 
 .control-btn.play-pause {
     background: #1DB954;
-    width: 56px;
-    height: 56px;
-    font-size: 20px;
+    width: 50px;
+    height: 50px;
+    font-size: 18px;
 }
 
 .control-btn.play-pause:hover {
@@ -288,23 +291,23 @@ body {
 
 .progress-container {
     flex: 1;
-    max-width: 500px;
-    margin: 0 20px;
+    max-width: 400px;
+    margin: 0 15px;
 }
 
 .progress-info {
     display: flex;
     justify-content: space-between;
-    font-size: 12px;
+    font-size: 11px;
     color: #aaa;
     margin-bottom: 5px;
 }
 
 .progress-bar {
     width: 100%;
-    height: 6px;
+    height: 4px;
     background: #333;
-    border-radius: 3px;
+    border-radius: 2px;
     outline: none;
     cursor: pointer;
     appearance: none;
@@ -312,16 +315,16 @@ body {
 
 .progress-bar::-webkit-slider-thumb {
     appearance: none;
-    width: 16px;
-    height: 16px;
+    width: 12px;
+    height: 12px;
     background: #1DB954;
     border-radius: 50%;
     cursor: pointer;
 }
 
 .progress-bar::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
+    width: 12px;
+    height: 12px;
     background: #1DB954;
     border-radius: 50%;
     cursor: pointer;
@@ -331,23 +334,25 @@ body {
 .player-options {
     display: flex;
     align-items: center;
-    gap: 15px;
-    min-width: 250px;
+    gap: 10px;
+    min-width: 180px;
     justify-content: flex-end;
+    flex-shrink: 0;
 }
 
 .player-options select {
     background: #333;
     color: white;
     border: 1px solid #555;
-    border-radius: 5px;
-    padding: 8px 12px;
+    border-radius: 4px;
+    padding: 6px 8px;
     cursor: pointer;
+    font-size: 12px;
 }
 
 .player-options button {
-    width: 40px;
-    height: 40px;
+    width: 36px;
+    height: 36px;
     border: none;
     border-radius: 50%;
     background: #333;
@@ -357,6 +362,7 @@ body {
     align-items: center;
     justify-content: center;
     transition: all 0.3s ease;
+    font-size: 14px;
 }
 
 .player-options button:hover {
@@ -438,13 +444,13 @@ body {
 
 .lyric-content p {
     margin: 20px 0;
-    font-size: 18px;
+    font-size: 16px;
     line-height: 1.6;
     color: #888;
     transition: all 0.3s ease;
     cursor: pointer;
-    padding: 10px;
-    border-radius: 8px;
+    padding: 8px;
+    border-radius: 6px;
 }
 
 .lyric-content p:hover {
@@ -454,12 +460,16 @@ body {
 
 .lyric-content p.active {
     color: #1DB954;
-    transform: scale(1.05);
+    transform: scale(1.02);
     background: rgba(29, 185, 84, 0.1);
 }
 
 /* Responsive Design */
 @media (max-width: 768px) {
+    body {
+        padding-bottom: 160px; /* 移动端播放器更高 */
+    }
+    
     .top-lists {
         grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
         gap: 15px;
@@ -467,12 +477,33 @@ body {
     
     .player {
         flex-direction: column;
-        gap: 15px;
+        gap: 10px;
         padding: 15px;
+        height: auto;
+        min-height: 140px;
+    }
+    
+    .player-info {
+        min-width: auto;
+        width: 100%;
+        justify-content: center;
     }
     
     .player-controls {
         order: -1;
+        justify-content: center;
+    }
+    
+    .progress-container {
+        max-width: none;
+        margin: 0;
+        width: 100%;
+    }
+    
+    .player-options {
+        min-width: auto;
+        width: 100%;
+        justify-content: center;
     }
     
     .lyric-panel {
@@ -486,7 +517,6 @@ body {
     
     .main-content {
         padding: 20px;
-        margin-bottom: 200px;
     }
 }
 

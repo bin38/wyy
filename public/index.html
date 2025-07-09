@@ -3,67 +3,107 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>云音乐</title>
+    <title>云音乐 - 发现好音乐</title>
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.1.1/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 </head>
 <body>
-    <div class="header">
-        <div class="search-bar">
-            <input type="text" id="searchInput" placeholder="搜索歌曲、歌手...">
-            <button id="searchBtn"><i class="fas fa-search"></i></button>
+    <header class="header">
+        <div class="header-container">
+            <div class="logo">
+                <i class="fas fa-music"></i>
+                <span>云音乐</span>
+            </div>
+            <div class="search-bar">
+                <div class="search-input-wrapper">
+                    <i class="fas fa-search search-icon"></i>
+                    <input type="text" id="searchInput" placeholder="搜索歌曲、歌手..." spellcheck="false">
+                </div>
+                <button id="searchBtn" class="search-btn">
+                    <i class="fas fa-search"></i>
+                </button>
+            </div>
+            <div class="header-actions">
+                <button class="theme-toggle" title="切换主题">
+                    <i class="fas fa-moon"></i>
+                </button>
+            </div>
         </div>
-    </div>
+    </header>
 
-    <div class="main-content" id="mainContent">
+    <main class="main-content" id="mainContent" role="main">
         <!-- 内容将由JS动态生成 -->
-    </div>
+    </main>
 
-    <div class="player" id="player">
-        <div class="player-info">
-            <img id="songArtwork" src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='60' height='60'><rect width='60' height='60' fill='%23333'/></svg>" alt="artwork">
-            <div>
-                <h4 id="songTitle">未选择歌曲</h4>
-                <p id="songArtist">-</p>
+    <footer class="player" id="player" role="contentinfo">
+        <div class="player-container">
+            <div class="player-info">
+                <img id="songArtwork" src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='60' height='60'><rect width='60' height='60' fill='%23333'/><text x='30' y='35' text-anchor='middle' fill='white' font-size='12'>封面</text></svg>" alt="歌曲封面" class="song-artwork">
+                <div class="song-details">
+                    <h4 id="songTitle" class="song-title">未选择歌曲</h4>
+                    <p id="songArtist" class="song-artist">-</p>
+                </div>
+            </div>
+            
+            <div class="player-controls">
+                <button id="prevBtn" class="control-btn" title="上一首" aria-label="上一首">
+                    <i class="fas fa-step-backward"></i>
+                </button>
+                <button id="playPauseBtn" class="control-btn play-pause" title="播放/暂停" aria-label="播放/暂停">
+                    <i class="fas fa-play"></i>
+                </button>
+                <button id="nextBtn" class="control-btn" title="下一首" aria-label="下一首">
+                    <i class="fas fa-step-forward"></i>
+                </button>
+            </div>
+            
+            <div class="progress-container">
+                <div class="progress-info">
+                    <span id="currentTime" class="time-display">0:00</span>
+                    <span id="totalDuration" class="time-display">0:00</span>
+                </div>
+                <div class="progress-wrapper">
+                    <div class="progress-track">
+                        <div class="progress-fill" id="progressFill"></div>
+                        <div class="progress-buffer" id="progressBuffer"></div>
+                        <input type="range" id="progressBar" class="progress-bar" value="0" step="0.1" min="0" max="100" aria-label="播放进度">
+                        <div class="progress-thumb" id="progressThumb"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="player-options">
+                <select id="qualitySelect" class="quality-select" aria-label="音质选择">
+                    <option value="standard">标准</option>
+                    <option value="high">较高</option>
+                    <option value="super">极高</option>
+                </select>
+                <button id="downloadBtn" class="option-btn" title="下载" aria-label="下载歌曲">
+                    <i class="fas fa-download"></i>
+                </button>
+                <button id="lyricBtn" class="option-btn" title="歌词" aria-label="显示歌词">
+                    <i class="fas fa-align-left"></i>
+                </button>
             </div>
         </div>
-        
-        <div class="player-controls">
-            <button id="prevBtn" class="control-btn"><i class="fas fa-step-backward"></i></button>
-            <button id="playPauseBtn" class="control-btn play-pause"><i class="fas fa-play"></i></button>
-            <button id="nextBtn" class="control-btn"><i class="fas fa-step-forward"></i></button>
-        </div>
-        
-        <div class="progress-container">
-            <div class="progress-info">
-                <span id="currentTime">0:00</span>
-                <span id="totalDuration">0:00</span>
-            </div>
-            <input type="range" id="progressBar" class="progress-bar" value="0" step="0.1">
-        </div>
-        
-        <div class="player-options">
-            <select id="qualitySelect">
-                <option value="standard">标准</option>
-                <option value="high">较高</option>
-                <option value="super">极高</option>
-            </select>
-            <button id="downloadBtn"><i class="fas fa-download"></i></button>
-            <button id="lyricBtn"><i class="fas fa-align-left"></i></button>
-        </div>
-    </div>
+    </footer>
 
-    <div class="lyric-panel" id="lyricPanel">
+    <div class="lyric-panel" id="lyricPanel" role="complementary" aria-label="歌词面板">
         <div class="lyric-header">
             <h3>歌词</h3>
-            <button id="closeLyricBtn" class="close-lyric"><i class="fas fa-times"></i></button>
+            <button id="closeLyricBtn" class="close-lyric" aria-label="关闭歌词">
+                <i class="fas fa-times"></i>
+            </button>
         </div>
-        <div class="lyric-content" id="lyricContent">
+        <div class="lyric-content" id="lyricContent" role="region" aria-label="歌词内容">
             <!-- 歌词将在这里显示 -->
         </div>
     </div>
 
-    <audio id="audioPlayer"></audio>
+    <audio id="audioPlayer" preload="metadata"></audio>
 
     <script src="script.js"></script>
 </body>

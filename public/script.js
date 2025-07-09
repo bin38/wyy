@@ -6,6 +6,8 @@ document.addEventListener('DOMContentLoaded', () => {
         currentSong: null,
         isPlaying: false,
         lyrics: [],
+        cache: new Map(),
+        isDragging: false,
     };
 
     // --- DOM ELEMENTS ---
@@ -35,10 +37,55 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const API_BASE_URL = '/api';
 
+    // --- CACHE HELPERS ---
+    function getCacheKey(type, params) {
+        return `${type}_${JSON.stringify(params)}`;
+    }
+
+    function getCache(key) {
+        const cached = state.cache.get(key);
+        if (cached && Date.now() - cached.timestamp < 10 * 60 * 1000) { // 10分钟缓存
+            return cached.data;
+        }
+        state.cache.delete(key);
+        return null;
+    }
+
+    function setCache(key, data) {
+        state.cache.set(key, {
+            data,
+            timestamp: Date.now()
+        });
+    }
+
     // --- API HELPERS ---
     const api = {
-        getTopLists: () => fetch(`${API_BASE_URL}/toplists`).then(res => res.json()),
-        getPlaylist: (id) => fetch(`${API_BASE_URL}/playlist?id=${id}`).then(res => res.json()),
+        getTopLists: async () => {
+            const cacheKey = getCacheKey('toplists', {});
+            const cached = getCache(cacheKey);
+            if (cached) {
+                console.log('Using cached toplists');
+                return cached;
+            }
+            
+            const result = await fetch(`${API_BASE_URL}/toplists`).then(res => res.json());
+            setCache(cacheKey, result);
+            return result;
+        },
+        
+        getPlaylist: async (id) => {
+            const cacheKey = getCacheKey('playlist', { id });
+            const cached = getCache(cacheKey);
+            if (cached) {
+                console.log('Using cached playlist:', id);
+                return cached;
+            }
+            
+            const result = await fetch(`${API_BASE_URL}/playlist?id=${id}`).then(res => res.json());
+            setCache(cacheKey, result);
+            return result;
+        },
+        
         search: (query) => fetch(`${API_BASE_URL}/search?query=${query}&type=music`).then(res => res.json()),
         getSongUrl: (id, quality) => fetch(`${API_BASE_URL}/song/url?id=${id}&quality=${quality}`).then(res => res.json()),
         getLyric: (id) => fetch(`${API_BASE_URL}/lyric?id=${id}`).then(res => res.json()),
@@ -51,12 +98,23 @@ document.addEventListener('DOMContentLoaded', () => {
         return url.replace(/^http:/, 'https:');
     }
 
-    function showLoading() {
-        mainContent.innerHTML = '<div style="text-align: center; padding: 50px; color: #888;">加载中...</div>';
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    function showLoading(message = '加载中...') {
+        mainContent.innerHTML = `
+            <div class="loading-container">
+                <div class="loading-spinner"></div>
+                <div class="loading-text">${message}</div>
+                <div class="loading-tips">数据正在加载，请稍候...</div>
+            </div>`;
     }
 
     function showError(message) {
-        mainContent.innerHTML = `<div style="text-align: center; padding: 50px; color: #ff6b6b;">${message}</div>`;
+        mainContent.innerHTML = `<div class="error-container"><i class="fas fa-exclamation-triangle"></i><div>${escapeHtml(message)}</div></div>`;
     }
 
     // --- UI RENDERING ---
@@ -65,20 +123,25 @@ document.addEventListener('DOMContentLoaded', () => {
         mainContent.innerHTML = '<div class="top-lists"></div>';
         const container = mainContent.querySelector('.top-lists');
         
-        lists.forEach(group => {
+        lists.forEach((group, groupIndex) => {
             if (group.data && group.data.length > 0) {
-                group.data.forEach(list => {
+                group.data.forEach((list, listIndex) => {
                     const item = document.createElement('div');
                     item.className = 'list-item';
                     item.dataset.id = list.id;
+                    // 添加渐入动画延迟
+                    item.style.animationDelay = `${(groupIndex * group.data.length + listIndex) * 0.1}s`;
                     
                     const imageUrl = fixImageUrl(list.coverImg);
+                    const title = escapeHtml(list.title || '未知标题');
+                    const description = escapeHtml(list.description || '');
+                    
                     item.innerHTML = `
-                        <img src="${imageUrl}" alt="${list.title}" onerror="this.src='data:image/svg+xml,<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"200\\" height=\\"200\\"><rect width=\\"200\\" height=\\"200\\" fill=\\"%23333\\"/><text x=\\"50%\\" y=\\"50%\\" text-anchor=\\"middle\\" fill=\\"white\\" font-size=\\"16\\">${list.title}</text></svg>'">
-                        <p>${list.title}</p>
-                        <small>${list.description || ''}</small>
+                        <img src="${imageUrl}" alt="${title}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"200\\" height=\\"200\\"><rect width=\\"200\\" height=\\"200\\" fill=\\"%23333\\"/><text x=\\"50%\\" y=\\"50%\\" text-anchor=\\"middle\\" fill=\\"white\\" font-size=\\"16\\">${title}</text></svg>'">
+                        <p>${title}</p>
+                        <small>${description}</small>
                     `;
-                    item.addEventListener('click', () => loadPlaylist(list.id));
+                    item.addEventListener('click', () => loadPlaylist(list.id, title));
                     container.appendChild(item);
                 });
             }
@@ -88,22 +151,23 @@ document.addEventListener('DOMContentLoaded', () => {
         const importItem = document.createElement('div');
         importItem.className = 'list-item import-item';
         importItem.innerHTML = `
-            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; background: linear-gradient(45deg, #667eea 0%, #764ba2 100%); border-radius: 8px; color: white;">
-                <i class="fas fa-plus" style="font-size: 2rem; margin-bottom: 10px;"></i>
-                <p style="margin: 0;">导入歌单</p>
+            <div class="import-content">
+                <i class="fas fa-plus"></i>
+                <p>导入歌单</p>
             </div>
         `;
         importItem.addEventListener('click', showImportDialog);
         container.appendChild(importItem);
     }
 
-    function renderPlaylist(playlist) {
+    function renderPlaylist(playlist, title = '歌单') {
         console.log('Rendering playlist:', playlist);
         mainContent.innerHTML = `
-            <div style="margin-bottom: 20px;">
-                <button onclick="showHomePage()" style="background: #333; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">
+            <div class="playlist-header">
+                <button onclick="showHomePage()" class="back-btn">
                     <i class="fas fa-arrow-left"></i> 返回主页
                 </button>
+                <h2>${escapeHtml(title)} (${playlist.length} 首)</h2>
             </div>
             <div class="playlist"></div>
         `;
@@ -114,13 +178,19 @@ document.addEventListener('DOMContentLoaded', () => {
             const item = document.createElement('div');
             item.className = 'song-item';
             item.dataset.index = index;
+            // 添加渐入动画延迟
+            item.style.animationDelay = `${index * 0.02}s`;
             
             const imageUrl = fixImageUrl(song.artwork);
+            const title = escapeHtml(song.title || '未知歌曲');
+            const artist = escapeHtml(song.artist || '未知歌手');
+            
             item.innerHTML = `
-                <img src="${imageUrl}" alt="${song.title}" class="artwork" width="40" height="40" onerror="this.src='data:image/svg+xml,<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"40\\" height=\\"40\\"><rect width=\\"40\\" height=\\"40\\" fill=\\"%23555\\"/></svg>'">
+                <span class="song-number">${(index + 1).toString().padStart(2, '0')}</span>
+                <img src="${imageUrl}" alt="${title}" class="artwork" width="40" height="40" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"40\\" height=\\"40\\"><rect width=\\"40\\" height=\\"40\\" fill=\\"%23555\\"/></svg>'">
                 <div class="song-item-info">
-                    <p style="margin: 0; font-weight: 500;">${song.title}</p>
-                    <p style="margin: 0; color: #999; font-size: 0.9rem;">${song.artist}</p>
+                    <p class="song-title">${title}</p>
+                    <p class="song-artist">${artist}</p>
                 </div>
                 <div class="song-actions">
                     <button class="action-btn" onclick="playSong(${index})" title="播放">
@@ -135,7 +205,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     function renderSearchResults(results) {
         if (results && results.data) {
-            renderPlaylist(results.data);
+            renderPlaylist(results.data, '搜索结果');
         } else {
             showError('搜索结果为空');
         }
@@ -144,36 +214,93 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- IMPORT PLAYLIST DIALOG ---
     function showImportDialog() {
         const dialog = document.createElement('div');
-        dialog.style.cssText = `
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.8); display: flex; align-items: center;
-            justify-content: center; z-index: 1000;
-        `;
+        dialog.className = 'modal-overlay';
         
         dialog.innerHTML = `
-            <div style="background: #282828; padding: 30px; border-radius: 10px; width: 90%; max-width: 500px;">
-                <h3 style="margin: 0 0 20px 0; color: white;">导入歌单</h3>
-                <input type="text" id="importUrl" placeholder="请输入网易云音乐歌单链接或ID" 
-                       style="width: 100%; padding: 12px; border: none; border-radius: 5px; background: #333; color: white; margin-bottom: 20px;">
-                <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                    <button onclick="this.parentElement.parentElement.parentElement.remove()" 
-                            style="padding: 10px 20px; background: #666; color: white; border: none; border-radius: 5px; cursor: pointer;">取消</button>
-                    <button onclick="importPlaylist()" 
-                            style="padding: 10px 20px; background: #1DB954; color: white; border: none; border-radius: 5px; cursor: pointer;">导入</button>
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>导入歌单</h3>
+                    <button class="close-btn" onclick="this.closest('.modal-overlay').remove()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <input type="text" id="importUrl" placeholder="请输入网易云音乐歌单链接或ID" class="import-input">
+                    <div class="modal-tips">
+                        <p>支持格式：</p>
+                        <ul>
+                            <li>完整分享链接</li>
+                            <li>歌单ID（纯数字）</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button onclick="this.closest('.modal-overlay').remove()" class="btn-cancel">取消</button>
+                    <button onclick="importPlaylist()" class="btn-confirm">导入</button>
                 </div>
             </div>
         `;
         
         document.body.appendChild(dialog);
         document.getElementById('importUrl').focus();
+        
+        // 点击背景关闭
+        dialog.addEventListener('click', (e) => {
+            if (e.target === dialog) {
+                dialog.remove();
+            }
+        });
+    }
+
+    // --- LYRIC MODAL ---
+    function showLyricModal() {
+        const modal = document.createElement('div');
+        modal.className = 'lyric-modal-overlay';
+        modal.innerHTML = `
+            <div class="lyric-modal">
+                <div class="lyric-modal-header">
+                    <div class="song-info">
+                        <img src="${fixImageUrl(state.currentSong?.artwork)}" alt="歌曲封面" class="modal-artwork">
+                        <div>
+                            <h3>${escapeHtml(state.currentSong?.title || '未知歌曲')}</h3>
+                            <p>${escapeHtml(state.currentSong?.artist || '未知歌手')}</p>
+                        </div>
+                    </div>
+                    <button class="close-btn" onclick="this.closest('.lyric-modal-overlay').remove()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="lyric-modal-content" id="modalLyricContent">
+                    ${lyricContent.innerHTML}
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // 点击背景关闭
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+        
+        // ESC键关闭
+        const handleEsc = (e) => {
+            if (e.key === 'Escape') {
+                modal.remove();
+                document.removeEventListener('keydown', handleEsc);
+            }
+        };
+        document.addEventListener('keydown', handleEsc);
     }
 
     // --- PLAYER LOGIC ---
-    function loadPlaylist(id) {
-        showLoading();
+    function loadPlaylist(id, title = '歌单') {
+        showLoading('正在加载歌单...');
         api.getPlaylist(id).then(result => {
             if (result && result.data) {
-                renderPlaylist(result.data);
+                renderPlaylist(result.data, title);
             } else {
                 showError('无法加载歌单');
             }
@@ -191,6 +318,23 @@ document.addEventListener('DOMContentLoaded', () => {
         updatePlayerUI();
         loadSongMedia();
         loadLyrics();
+        
+        // 更新歌曲列表中的播放状态
+        updatePlaylistUI();
+    }
+
+    function updatePlaylistUI() {
+        const songItems = document.querySelectorAll('.song-item');
+        songItems.forEach((item, index) => {
+            const playBtn = item.querySelector('.action-btn i');
+            if (index === state.currentIndex && state.isPlaying) {
+                item.classList.add('playing');
+                playBtn.className = 'fas fa-pause';
+            } else {
+                item.classList.remove('playing');
+                playBtn.className = 'fas fa-play';
+            }
+        });
     }
 
     function updatePlayerUI() {
@@ -228,6 +372,7 @@ document.addEventListener('DOMContentLoaded', () => {
             audioPlayer.pause();
         }
         updatePlayerUI();
+        updatePlaylistUI();
     }
     
     function prevSong() {
@@ -249,8 +394,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     function updateProgress() {
-        if (audioPlayer.duration) {
-            progressBar.value = (audioPlayer.currentTime / audioPlayer.duration) * 100;
+        if (!state.isDragging && audioPlayer.duration) {
+            const progress = (audioPlayer.currentTime / audioPlayer.duration) * 100;
+            progressBar.value = progress;
+            // 更新进度条的CSS变量
+            progressBar.style.setProperty('--progress', `${progress}%`);
             currentTimeEl.textContent = formatTime(audioPlayer.currentTime);
             totalDurationEl.textContent = formatTime(audioPlayer.duration);
             updateLyricHighlight();
@@ -318,11 +466,7 @@ document.addEventListener('DOMContentLoaded', () => {
             p.textContent = line.text;
             p.dataset.time = line.time;
             p.dataset.index = index;
-            p.style.cssText = `
-                margin: 20px 0; font-size: 1.2rem; color: #888; 
-                transition: all 0.3s ease; cursor: pointer; padding: 10px;
-                border-radius: 5px;
-            `;
+            p.className = 'lyric-line';
             p.addEventListener('click', () => {
                 audioPlayer.currentTime = line.time;
             });
@@ -342,17 +486,24 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (activeLine !== null) {
-            const allLines = lyricContent.querySelectorAll('p');
+            const allLines = document.querySelectorAll('.lyric-line');
             allLines.forEach((p, index) => {
                 if (index === activeLine) {
-                    p.style.color = '#1DB954';
-                    p.style.transform = 'scale(1.05)';
-                    p.style.background = 'rgba(29, 185, 84, 0.1)';
+                    p.classList.add('active');
                     p.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 } else {
-                    p.style.color = '#888';
-                    p.style.transform = 'scale(1)';
-                    p.style.background = 'transparent';
+                    p.classList.remove('active');
+                }
+            });
+            
+            // 同步模态框中的歌词
+            const modalLines = document.querySelectorAll('#modalLyricContent .lyric-line');
+            modalLines.forEach((p, index) => {
+                if (index === activeLine) {
+                    p.classList.add('active');
+                    p.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                } else {
+                    p.classList.remove('active');
                 }
             });
         }
@@ -373,11 +524,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         try {
-            showLoading();
+            showLoading('正在导入歌单...');
             const result = await api.importPlaylist(url);
             if (result && result.data) {
-                renderPlaylist(result.data);
-                document.querySelector('[style*="position: fixed"]').remove(); // 关闭对话框
+                renderPlaylist(result.data, '导入的歌单');
+                document.querySelector('.modal-overlay').remove();
             } else {
                 showError('导入歌单失败');
             }
@@ -406,13 +557,35 @@ document.addEventListener('DOMContentLoaded', () => {
         playPauseBtn.addEventListener('click', togglePlayPause);
         prevBtn.addEventListener('click', prevSong);
         nextBtn.addEventListener('click', nextSong);
-        progressBar.addEventListener('input', seek);
+        
+        // 优化进度条拖拽体验
+        progressBar.addEventListener('mousedown', () => {
+            state.isDragging = true;
+        });
+        
+        progressBar.addEventListener('mouseup', () => {
+            state.isDragging = false;
+            seek();
+        });
+        
+        progressBar.addEventListener('input', () => {
+            if (state.isDragging) {
+                const progress = progressBar.value;
+                progressBar.style.setProperty('--progress', `${progress}%`);
+                if (audioPlayer.duration) {
+                    currentTimeEl.textContent = formatTime((progress / 100) * audioPlayer.duration);
+                }
+            }
+        });
+        
+        progressBar.addEventListener('change', seek);
+        
         audioPlayer.addEventListener('timeupdate', updateProgress);
         audioPlayer.addEventListener('ended', nextSong);
         
         searchBtn.addEventListener('click', () => {
             if (searchInput.value) {
-                showLoading();
+                showLoading('正在搜索...');
                 api.search(searchInput.value).then(renderSearchResults).catch(error => {
                     console.error('Search failed:', error);
                     showError('搜索失败');
@@ -422,7 +595,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         searchInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && searchInput.value) {
-                showLoading();
+                showLoading('正在搜索...');
                 api.search(searchInput.value).then(renderSearchResults).catch(error => {
                     console.error('Search failed:', error);
                     showError('搜索失败');
@@ -430,8 +603,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        lyricBtn.addEventListener('click', () => lyricPanel.classList.add('show'));
-        closeLyricBtn.addEventListener('click', () => lyricPanel.classList.remove('show'));
+        lyricBtn.addEventListener('click', () => {
+            if (state.currentSong) {
+                showLyricModal();
+            } else {
+                alert('请先播放一首歌曲');
+            }
+        });
         
         qualitySelect.addEventListener('change', () => {
             if (state.currentSong) {
@@ -444,7 +622,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- INITIALIZATION ---
     function init() {
-        showLoading();
+        showLoading('正在加载排行榜...');
         api.getTopLists().then(result => {
             console.log('Received toplists:', result);
             if (result && Array.isArray(result)) {

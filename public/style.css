@@ -684,11 +684,38 @@ body {
     color: white;
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 8px;
-    padding: 8px 12px;
+    padding: 8px 32px 8px 12px;
     cursor: pointer;
     font-size: 13px;
     font-family: inherit;
     backdrop-filter: blur(10px);
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    position: relative;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='white' d='M1.41 0L6 4.59L10.59 0L12 1.41L6 7.41L0 1.41L1.41 0Z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    min-width: 80px;
+    transition: all 0.3s ease;
+}
+
+.quality-select:hover {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.quality-select:focus {
+    outline: none;
+    background: rgba(255, 255, 255, 0.15);
+    border-color: #1DB954;
+    box-shadow: 0 0 0 2px rgba(29, 185, 84, 0.3);
+}
+
+.quality-select option {
+    background: #1a1a1a;
+    color: white;
+    padding: 8px 12px;
 }
 
 .option-btn {

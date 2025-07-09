@@ -8,6 +8,38 @@ const bigInt = require('big-integer');
 const dayjs = require('dayjs');
 const cheerio = require('cheerio');
 
+// 添加缓存
+const cache = new Map();
+const CACHE_DURATION = 30 * 60 * 1000; // 30分钟缓存
+
+function getCacheKey(url, params = {}) {
+    return `${url}_${JSON.stringify(params)}`;
+}
+
+function getCache(key) {
+    const cached = cache.get(key);
+    if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+        return cached.data;
+    }
+    cache.delete(key);
+    return null;
+}
+
+function setCache(key, data) {
+    cache.set(key, {
+        data,
+        timestamp: Date.now()
+    });
+}
+
+// 优化的axios实例
+const axiosInstance = axios.create({
+    timeout: 8000,
+    headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+    }
+});
+
 function create_key() {
     var d, e, b = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", c = "";
     for (d = 0; 16 > d; d += 1)
@@ -92,6 +124,10 @@ function formatAlbumItem(_) {
 const pageSize = 30;
 
 async function searchBase(query, page, type) {
+    const cacheKey = getCacheKey('search', { query, page, type });
+    const cached = getCache(cacheKey);
+    if (cached) return cached;
+    
     const data = {
         s: query,
         limit: pageSize,
@@ -113,13 +149,21 @@ async function searchBase(query, page, type) {
         referer: "https://music.163.com/search/",
         "accept-language": "zh-CN,zh;q=0.9",
     };
-    const res = (await axios({
-        method: "post",
-        url: "https://music.163.com/weapi/search/get",
-        headers,
-        data: paeData,
-    })).data;
-    return res;
+    
+    try {
+        const res = (await axiosInstance({
+            method: "post",
+            url: "https://music.163.com/weapi/search/get",
+            headers,
+            data: paeData,
+        })).data;
+        
+        setCache(cacheKey, res);
+        return res;
+    } catch (error) {
+        console.error('Search error:', error.message);
+        throw error;
+    }
 }
 
 async function search(query, page, type) {
@@ -131,11 +175,16 @@ async function search(query, page, type) {
             data: songs,
         };
     }
-    // 可以添加其他类型的搜索
     return { isEnd: true, data: [] };
 }
 
 async function getValidMusicItems(trackIds) {
+    if (!trackIds || trackIds.length === 0) return [];
+    
+    const cacheKey = getCacheKey('songs', { ids: trackIds.sort().join(',') });
+    const cached = getCache(cacheKey);
+    if (cached) return cached;
+    
     const headers = {
         Referer: "https://y.music.163.com/",
         Origin: "https://y.music.163.com/",
@@ -143,35 +192,63 @@ async function getValidMusicItems(trackIds) {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.135 Safari/537.36",
         "Content-Type": "application/x-www-form-urlencoded",
     };
+    
     try {
-        const res = (await axios.get(`https://music.163.com/api/song/detail/?ids=[${trackIds.join(",")}]`, { headers })).data;
+        const res = (await axiosInstance.get(`https://music.163.com/api/song/detail/?ids=[${trackIds.join(",")}]`, { headers })).data;
         const validMusicItems = res.songs?.map(formatMusicItem) || [];
+        
+        setCache(cacheKey, validMusicItems);
         return validMusicItems;
     } catch (e) {
-        console.error(e);
+        console.error('Get valid music items error:', e.message);
         return [];
     }
 }
 
 async function getSheetMusicById(id) {
+    const cacheKey = getCacheKey('playlist', { id });
+    const cached = getCache(cacheKey);
+    if (cached) return cached;
+    
     const headers = {
         Referer: "https://y.music.163.com/",
         Origin: "https://y.music.163.com/",
         authority: "music.163.com",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.135 Safari/537.36",
     };
-    const sheetDetail = (await axios.get(`https://music.163.com/api/v3/playlist/detail?id=${id}&n=5000`, {
-        headers,
-    })).data;
-    const trackIds = sheetDetail.playlist.trackIds?.map((_) => _.id) || [];
-    let result = [];
-    let idx = 0;
-    while (idx * 200 < trackIds.length) {
-        const res = await getValidMusicItems(trackIds.slice(idx * 200, (idx + 1) * 200));
-        result = result.concat(res);
-        ++idx;
+    
+    try {
+        const sheetDetail = (await axiosInstance.get(`https://music.163.com/api/v3/playlist/detail?id=${id}&n=5000`, {
+            headers,
+        })).data;
+        
+        const trackIds = sheetDetail.playlist.trackIds?.map((_) => _.id) || [];
+        
+        // 分批处理，提高速度
+        let result = [];
+        const batchSize = 100; // 减少批次大小以提高速度
+        const batches = [];
+        
+        for (let i = 0; i < trackIds.length; i += batchSize) {
+            batches.push(trackIds.slice(i, i + batchSize));
+        }
+        
+        // 并行处理批次
+        const batchPromises = batches.map(batch => getValidMusicItems(batch));
+        const batchResults = await Promise.allSettled(batchPromises);
+        
+        batchResults.forEach(batchResult => {
+            if (batchResult.status === 'fulfilled') {
+                result = result.concat(batchResult.value);
+            }
+        });
+        
+        setCache(cacheKey, result);
+        return result;
+    } catch (error) {
+        console.error('Get sheet music error:', error.message);
+        throw error;
     }
-    return result;
 }
 
 async function importMusicSheet(urlLike) {
@@ -184,13 +261,23 @@ async function importMusicSheet(urlLike) {
 }
 
 async function getTopLists() {
+    const cacheKey = getCacheKey('toplists');
+    const cached = getCache(cacheKey);
+    if (cached) {
+        console.log('Using cached toplists');
+        return cached;
+    }
+    
     try {
-        const res = await axios.get("https://music.163.com/discover/toplist", {
+        console.log('Fetching toplists from API...');
+        const res = await axiosInstance.get("https://music.163.com/discover/toplist", {
             headers: {
                 referer: "https://music.163.com/",
                 "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36 Edg/108.0.1462.54",
             },
+            timeout: 10000 // 设置超时
         });
+        
         const $ = cheerio.load(res.data);
         const children = $(".n-minelst").children();
         const groups = [];
@@ -211,7 +298,18 @@ async function getTopLists() {
                         const ele = $(element);
                         const id = ele.attr("data-res-id");
                         const imgSrc = ele.find("img").attr("src");
-                        const coverImg = imgSrc ? imgSrc.replace(/(\.jpg\?).*/, ".jpg?param=800y800") : '';
+                        // 优化图片URL处理
+                        let coverImg = '';
+                        if (imgSrc) {
+                            // 确保HTTPS
+                            coverImg = imgSrc.replace(/^http:/, 'https:');
+                            // 优化图片参数
+                            if (coverImg.includes('?')) {
+                                coverImg = coverImg.replace(/(\.jpg\?).*/, ".jpg?param=300y300");
+                            } else {
+                                coverImg += "?param=300y300";
+                            }
+                        }
                         const title = ele.find("p.name").text();
                         const description = ele.find("p.s-fc4").text();
                         return {
@@ -221,7 +319,8 @@ async function getTopLists() {
                             description,
                         };
                     })
-                    .toArray();
+                    .toArray()
+                    .filter(item => item.id); // 过滤掉无效项目
             }
         }
         
@@ -229,30 +328,52 @@ async function getTopLists() {
             groups.push(currentGroup);
         }
         
+        console.log(`Fetched ${groups.length} groups with ${groups.reduce((sum, g) => sum + g.data.length, 0)} total items`);
+        
+        setCache(cacheKey, groups);
         return groups;
     } catch (error) {
-        console.error('Get toplists error:', error);
-        throw error;
+        console.error('Get toplists error:', error.message);
+        
+        // 返回备用数据
+        const fallbackData = [
+            {
+                title: "官方榜",
+                data: [
+                    { id: "3778678", title: "飙升榜", description: "每日更新", coverImg: "https://p2.music.126.net/DrRIg6CrgDfVLEph9SNh7w==/18696095720518497.jpg?param=300y300" },
+                    { id: "3779629", title: "新歌榜", description: "每日更新", coverImg: "https://p2.music.126.net/mem2aOykdf7tEmd6bjZQWw==/18590542627753061.jpg?param=300y300" },
+                    { id: "2884035", title: "原创榜", description: "每周更新", coverImg: "https://p2.music.126.net/sBzD11nforcuh1jdLSgX7g==/18740076185638788.jpg?param=300y300" },
+                    { id: "19723756", title: "热歌榜", description: "每周更新", coverImg: "https://p2.music.126.net/GhhuF6Ep5Tpnpz9JXas-pw==/18708885596733693.jpg?param=300y300" }
+                ]
+            }
+        ];
+        return fallbackData;
     }
 }
 
 const qualityLevels = {
     low: "128k",
-    standard: "320k",
+    standard: "320k", 
     high: "320k",
     super: "320k",
 };
 
 async function getMediaSource(musicItem, quality) {
+    const cacheKey = getCacheKey('media', { id: musicItem.id, quality });
+    const cached = getCache(cacheKey);
+    if (cached) return cached;
+    
     try {
-        const res = await axios.get(`https://wyy-api-three.vercel.app/song/url?id=${musicItem.id}&quality=${qualityLevels[quality] || '320k'}`, {
-            timeout: 10000
+        const res = await axiosInstance.get(`https://wyy-api-three.vercel.app/song/url?id=${musicItem.id}&quality=${qualityLevels[quality] || '320k'}`, {
+            timeout: 8000
         });
         
         if (res.data && res.data.url && res.data.url.startsWith('http')) {
-            return {
+            const result = {
                 url: res.data.url,
             };
+            setCache(cacheKey, result);
+            return result;
         }
         
         console.log('API返回异常数据:', JSON.stringify(res.data));
@@ -264,6 +385,10 @@ async function getMediaSource(musicItem, quality) {
 }
 
 async function getLyric(musicItem) {
+    const cacheKey = getCacheKey('lyric', { id: musicItem.id });
+    const cached = getCache(cacheKey);
+    if (cached) return cached;
+    
     const headers = {
         Referer: "https://y.music.163.com/",
         Origin: "https://y.music.163.com/",
@@ -271,18 +396,29 @@ async function getLyric(musicItem) {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.135 Safari/537.36",
         "Content-Type": "application/x-www-form-urlencoded",
     };
-    const data = { id: musicItem.id, lv: -1, tv: -1, csrf_token: "" };
-    const pae = getParamsAndEnc(JSON.stringify(data));
-    const paeData = qs.stringify(pae);
-    const result = (await axios({
-        method: "post",
-        url: `https://interface.music.163.com/weapi/song/lyric?csrf_token=`,
-        headers,
-        data: paeData,
-    })).data;
-    return {
-        rawLrc: result.lrc?.lyric || '',
-    };
+    
+    try {
+        const data = { id: musicItem.id, lv: -1, tv: -1, csrf_token: "" };
+        const pae = getParamsAndEnc(JSON.stringify(data));
+        const paeData = qs.stringify(pae);
+        
+        const result = (await axiosInstance({
+            method: "post",
+            url: `https://interface.music.163.com/weapi/song/lyric?csrf_token=`,
+            headers,
+            data: paeData,
+        })).data;
+        
+        const lyricData = {
+            rawLrc: result.lrc?.lyric || '',
+        };
+        
+        setCache(cacheKey, lyricData);
+        return lyricData;
+    } catch (error) {
+        console.error('Get lyric error:', error.message);
+        return { rawLrc: '' };
+    }
 }
 
 module.exports = {
